@@ -1,0 +1,187 @@
+name: nightly-scrape
+
+on:
+  schedule:
+    # 09:00 PKT (UTC+5) = 04:00 UTC. GitHub cron is UTC and its delivery is
+    # often delayed 15-60 min at peak, so don't schedule anything that must fire
+    # to the minute.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: "comma-separated source ids (blank = all enabled)"
+        required: false
+        default: ""
+      limit:
+        description: "max candidates per source (0 = no limit)"
+        required: false
+        default: "0"
+      dry_run:
+        description: "skip notifications"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write          # to push data/scholarships.db + docs/ to the Pages branch
+  pages: write
+  id-token: write
+  issues: write            # to open an issue when a source breaks
+
+concurrency:
+  group: nightly-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+      TO_EMAIL: ${{ secrets.TO_EMAIL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+      DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+      DIGEST_SECRET: ${{ secrets.DIGEST_SECRET }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Only install a real browser when a source actually asks for it —
+      # it costs ~1-2 minutes and ~400 MB every single run otherwise.
+      - name: Detect whether Playwright is needed
+        id: need_pw
+        run: |
+          if grep -qE "^\s*render:\s*true" config.yaml; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Playwright + Chromium
+        if: steps.need_pw.outputs.needed == 'true'
+        run: |
+          pip install "playwright>=1.44"
+          playwright install --with-deps chromium
+
+      # The DB is the dedupe memory. Store it as a workflow artifact (and on the
+      # pages branch below) instead of committing it to main — that way the repo
+      # history stays small while re-runs still cost ~0 tokens.
+      - name: Restore database + caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/scholarships.db
+            data/scholarships.db-wal
+            data/cache
+          key: sbdb-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            sbdb-${{ github.ref_name }}-
+
+      - name: Run the agent
+        id: run
+        # tee would replace the exit code with tee's; write the files separately
+        # and let ci/wrap_run.py guarantee run.json is valid JSON either way.
+        run: |
+          LIMIT="${{ github.event.inputs.limit }}"
+          ARGS="--json"
+          [ -n "${{ github.event.inputs.sources }}" ] && ARGS="$ARGS $(printf -- '--source %s' $(echo '${{ github.event.inputs.sources }}' | tr ',' ' '))"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --no-notify"; fi
+          if [ -n "$LIMIT" ] && [ "$LIMIT" != "0" ]; then ARGS="$ARGS --limit $LIMIT"; fi
+          set +e
+          python cli.py run $ARGS > run.json 2> run.log
+          RC=$?
+          python ci/wrap_run.py "$RC"
+          echo "exit=$RC" >> "$GITHUB_OUTPUT"
+          tail -40 run.log
+
+      - name: Summarise run
+        id: summarise
+        if: always()
+        run: python ci/summarise.py run.json "$GITHUB_STEP_SUMMARY" "$GITHUB_OUTPUT"
+
+      - name: Publish dashboard to Pages (docs/)
+        if: (github.event_name == 'schedule' || steps.summarise.outputs.publish == 'true') && steps.run.outputs.exit == '0'
+        run: |
+          if [ -f data/out/index.html ]; then
+            # docs/ on the same branch is what GitHub Pages ("Deploy from a
+            # branch") serves — no extra Pages action config needed.
+            mkdir -p docs && cp data/out/index.html data/out/data.json data/out/scholarships.csv docs/
+            echo 'jekyll: {}' > docs/_config.yml
+          fi
+
+      - name: Commit database + dashboard
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: "data/scholarships.db data/cache/http_cache.sqlite3 data/cache/parse_cache.sqlite3 docs"
+          default_author: github_actions
+          message: "chore(nightly): update database and dashboard"
+          push: true
+
+      - name: Fail the workflow loudly when sources broke
+        if: steps.summarise.outputs.failed_sources != ''
+        run: |
+          echo "::warning::Sources with problems: ${{ steps.summarise.outputs.failed_sources }}"
+          if [ "${{ steps.summarise.outputs.all_failed }}" = "true" ]; then
+            echo "every source failed — exiting non-zero so the schedule shows red"
+            exit 1
+          fi
+
+      - name: Open an issue when a source stays broken
+        if: steps.summarise.outputs.failed_sources != '' && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `⚠️ Scholarship scraper problems in the nightly run.
+
+            ${{ steps.summarise.outputs.failed_table }}
+
+            Reproduce locally: \`python cli.py test-source <id> --limit 3\`
+            Usually a selector moved — fix it in \`config.yaml\`, no Python needed.`;
+            const dupes = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: 'scraper-health', per_page: 20
+            });
+            if (dupes.data.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: dupes.data[0].number, body: 'Still failing:\n\n' + body
+              });
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: 'Scraper health: some sources returned nothing',
+              body, labels: ['scraper-health']
+            });
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-${{ github.run_id }}
+          path: |
+            run.json
+            data/out/
+          retention-days: 14
+          if-no-files-found: ignore

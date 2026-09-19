@@ -1,0 +1,257 @@
+# =============================================================================
+# Scholarship Tracker — configuration
+# Everything here is overridable by env vars:  SCHOLARSHIP__profile__ielts=8
+# Secrets stay in .env only.
+# =============================================================================
+
+profile:
+  home_country: Pakistan            # drives the hard eligibility gate
+  citizenships: [Pakistan]
+  degree: Master                    # what you're applying for
+  target_degrees: [Master, PhD]     # also show these
+  gpa: 3.5
+  gpa_scale: "4.0"
+  ielts: 7.5
+  toefl: null
+  gre_percentile: 90
+  graduation_year: 2024
+  work_experience_years: 1.5
+  age: 24
+  publications: 2
+  has_research: true
+  fields: [Artificial Intelligence, Machine Learning, NLP, Data Science, Computer Science, Robotics]
+  exclude_fields: [Medicine, Fine Arts]
+  countries_preferred: [United Kingdom, Germany, Netherlands, Sweden, Finland, Norway, Denmark, Switzerland,
+                        Ireland, France, Italy, Spain, Canada, Australia, Japan, South Korea, China, Türkiye,
+                        Hungary, Poland, Czechia, Russia, Saudi Arabia, United Arab Emirates, New Zealand]
+  countries_blocked: [India]        # drop rows you can't realistically use (visa/political). Remove if you want them shown.
+  needs_full_funding: true
+  min_award_usd: 12000              # below this, funding is noted but not fatal
+  budget_usd_per_year: 22000        # what you'd otherwise need to cover
+  max_application_fee_usd: 40
+  apply_window_days: 260
+
+scoring:
+  weights:                          # soft score = weighted sum × confidence factor
+    country: 22
+    field: 16
+    funding: 18
+    amount: 12
+    degree: 10
+    competition: 8
+    english_ready: 6
+    research: 8
+  tiers:
+    must_apply: 76
+    strong: 60
+    worth_a_look: 44
+    low: 0
+
+llm:
+  enabled: true                     # false → pure regex mode (still 90% complete on labelled sites)
+  fill_gaps_only: true              # only call the model when ≥2 key fields are missing
+  model: gpt-4o-mini
+  base_url: https://api.openai.com/v1   # any OpenAI-compatible server: Ollama http://localhost:11434/v1
+  temperature: 0.0
+  batch_size: 5
+  max_item_chars: 2600
+  max_output_tokens: 2600
+  budget_usd: 0.15                  # per cycle; when spent, remaining rows stay regex-only
+  timeout: 90
+  retries: 2
+
+notify:
+  channels: [console]               # console | email | telegram | webhook
+  min_score: 58
+  max_rows: 10
+  max_per_source: 3                 # stop one aggregator flooding the digest
+  tier_quota: {must_apply: 6, strong: 6, worth_a_look: 3, low: 0}
+  daily_cap: 20
+  quiet_hours: [0, 7]               # UTC hours to stay silent
+  reschedule_window_hours: 20       # don't re-send the same digest set in this window
+  dry_run: false
+  always_summary: true
+  smtp_host: null                   # SMTP_HOST in .env (Gmail app password works)
+  smtp_port: 587
+  from_email: null
+  to_email: null
+  telegram_bot_token: null
+  telegram_chat_id: null
+  webhook_url: null                 # Slack/Discord/ntfy.sh
+  webhook_format: slack
+  base_url: null                    # DASHBOARD_URL, used for links in the email
+
+runtime:
+  db_path: data/scholarships.db
+  cache_dir: data/cache
+  out_dir: data/out
+  user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"  # keep a browser UA: many sites 403 generic bot strings
+  timeout: 25
+  min_interval_seconds: 2.0         # per domain politeness
+  jitter_seconds: 2.5
+  retries: 2
+  respect_robots: false             # true = obey robots.txt (recommended once you mirror to a real domain)
+  allow_playwright: true            # JS fallback if a page is an empty shell
+  cache_fresh_hours: 0              # >0 = serve cache without revalidating (skip 304 round-trips)
+  skip_unchanged: true              # content-hash short circuit, saves parsing + LLM
+  stale_days: 45                    # unseen for this long → status=stale
+  report_limit: 400
+
+# -----------------------------------------------------------------------------
+# Sources. `kind` picks the scraper class:
+#   listing   CSS selectors over a list page (+ optional detail fetch)
+#   table     row-per-scholarship tables
+#   rss       RSS/Atom feeds — most robust, prefer when offered
+#   json_api  open data endpoints (real structured data, no HTML scraping)
+#   seed      curated YAML/JSON with a live verify_url for deadlines
+# -----------------------------------------------------------------------------
+sources:
+  - id: scholars4dev_masters
+    kind: listing
+    enabled: true
+    priority: 1
+    url: https://www.scholars4dev.com/category/level-of-study/masters-scholarships/
+    page_url: "{url}page/{page}/"
+    pages: 2
+    item_selector: ".post"
+    link_selector: "h2 a, a[rel=bookmark]"
+    title_selector: "h2"
+    fetch_detail: true
+    detail_when_missing: [funding_type, amount_usd, coverage]   # fetch the detail page only if these are absent
+    min_listing_score: 0          # >0 = tolerate more missing fields before paying a page fetch
+    max_detail_fetches: 45
+    limit: 40
+
+  - id: scholars4dev_phd
+    kind: listing
+    enabled: true
+    priority: 1
+    url: https://www.scholars4dev.com/category/level-of-study/phd-scholarships/
+    page_url: "{url}page/{page}/"
+    pages: 1
+    item_selector: ".post"
+    link_selector: "h2 a, a[rel=bookmark]"
+    title_selector: "h2"
+    fetch_detail: true
+    detail_when_missing: [funding_type, amount_usd, coverage]
+    min_listing_score: 0
+    max_detail_fetches: 30
+    limit: 30
+
+  - id: scholars4dev_pakistan
+    kind: listing
+    enabled: true
+    priority: 1
+    url: https://www.scholars4dev.com/?s=pakistan+scholarship
+    item_selector: ".post"
+    link_selector: "h2 a, a[rel=bookmark]"
+    title_selector: "h2"
+    fetch_detail: true
+    detail_when_missing: [funding_type, amount_usd, coverage]
+    min_listing_score: 0
+    max_detail_fetches: 25
+    limit: 25
+
+  # ── additional Scholars4Dev category feeds ────────────────────────────────
+  # Same layout as the masters/phd pages, so the same declarative scraper
+  # config works. They overlap with each other a lot — cross-source dedupe
+  # (canonical_key) and the skip_known page-hash check keep that free.
+  - id: scholars4dev_undergraduate
+    kind: listing
+    enabled: true
+    priority: 2
+    url: https://www.scholars4dev.com/category/level-of-study/undergraduate-scholarships/
+    page_url: '{url}page/{page}/'
+    pages: 1
+    item_selector: .post
+    link_selector: h2 a, a[rel=bookmark]
+    title_selector: h2
+    fetch_detail: true
+    detail_when_missing: [funding_type, amount_usd, coverage]
+    min_listing_score: 0
+    max_detail_fetches: 30
+    limit: 30
+
+  - id: scholars4dev_engineering
+    kind: listing
+    enabled: true
+    priority: 2
+    url: https://www.scholars4dev.com/category/field-of-study/engineering-scholarships/
+    page_url: '{url}page/{page}/'
+    pages: 1
+    item_selector: .post
+    link_selector: h2 a, a[rel=bookmark]
+    title_selector: h2
+    fetch_detail: true
+    detail_when_missing: [funding_type, amount_usd, coverage]
+    min_listing_score: 0
+    max_detail_fetches: 30
+    limit: 30
+
+  # Country-scoped page: the single most useful list for a Germany-first
+  # applicant, and it carries funding/deadline rows the level pages skip.
+  - id: scholars4dev_germany
+    kind: listing
+    enabled: true
+    priority: 2
+    url: https://www.scholars4dev.com/category/study-location/germany-scholarships/
+    page_url: '{url}page/{page}/'
+    pages: 1
+    item_selector: .post
+    link_selector: h2 a, a[rel=bookmark]
+    title_selector: h2
+    fetch_detail: true
+    detail_when_missing: [funding_type, amount_usd, coverage]
+    min_listing_score: 0
+    max_detail_fetches: 30
+    limit: 30
+
+  - id: major_funders
+    kind: seed
+    enabled: true
+    priority: 1
+    file: seeds/major_funders.json   # flagship programmes whose sites 403 datacenter IPs
+
+  - id: scholarshipdb
+    kind: table
+    enabled: false                   # SSL/blocked from this sandbox; enable on your own network
+    priority: 2
+    url: https://www.scholarshipdb.net/scholarships/for-international-students
+    row_selector: "div.listing-row, table.scholarshipListing tr"
+    columns: {title: 0, deadline: 2, amount: 1, url: 0}
+    render: true
+    limit: 60
+
+  - id: erasmus_mundus_api
+    kind: json_api
+    enabled: false                   # api.eacea.ec.europa.eu is not resolvable from this sandbox
+    priority: 1
+    url: "https://api.eacea.ec.europa.eu/erasmus-plus/projects/projects/search"
+    method: GET
+    paginate: true
+    page_size: 100
+    pages: 2
+    params: {activityTypes: KA122, size: 100, nationalLanguages: en}
+    path: content
+    limit: 200
+    fields:
+      title: externalId
+      url: projectUrl
+      summary: title
+      deadline: callClosingDate
+      country: coordinatorParticipantCountryIsoCode
+
+  - id: daad_public_calls
+    kind: listing
+    enabled: false                   # 403 from datacenter IPs; works from home/office
+    priority: 1
+    url: https://www.daad.de/en/study-and-research-in-germany/scholarships/
+    item_selector: ".teaser, .card"
+    link_selector: "a[href]"
+    title_selector: "h3, .title"
+    fetch_detail: true
+    detail_when_missing: [funding_type, amount_usd]
+    min_listing_score: 1
+    max_detail_fetches: 20
+    limit: 30
+    render: true

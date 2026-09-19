@@ -1,0 +1,10 @@
+# Core (all that is needed for a regex-only run)
+requests>=2.32
+beautifulsoup4>=4.12
+lxml>=5.1
+SQLAlchemy>=2.0.30
+pydantic>=2.7
+PyYAML>=6.0
+
+# Optional — only if you enable `render: true` sources / JS-heavy sites
+# playwright>=1.44        # then also: playwright install chromium
