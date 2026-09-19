@@ -85,9 +85,12 @@ jobs:
           pip install "playwright>=1.44"
           playwright install --with-deps chromium
 
-      # The DB is the dedupe memory. Store it as a workflow artifact (and on the
-      # pages branch below) instead of committing it to main — that way the repo
-      # history stays small while re-runs still cost ~0 tokens.
+      # The DB is the dedupe memory: without it every run looks brand new and the
+      # same scholarship is re-notified forever. It is restored from actions/cache
+      # (fast path) and *also* committed back to the branch below (slow path), so
+      # an expired cache — which happens without warning — does not reset history.
+      # Anyone running locally pulls the same file, which is the only reason the
+      # laptop and the Action can share one set of "already notified" rows.
       - name: Restore database + caches
         uses: actions/cache@v4
         with:
@@ -131,10 +134,27 @@ jobs:
             echo 'jekyll: {}' > docs/_config.yml
           fi
 
+      - name: Fold the WAL into the database file
+        if: always()
+        # SQLite in WAL mode (see db/models.py) leaves the newest transactions in
+        # data/scholarships.db-wal — which is not what we commit. Checkpointing
+        # first is the difference between persisting history and committing a
+        # snapshot that is missing the run that just happened.
+        run: |
+          if [ -f data/scholarships.db ]; then
+            python -c "import sqlite3; c=sqlite3.connect('data/scholarships.db'); print('checkpointed:', c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchall()); c.close()"
+            rm -f data/scholarships.db-wal data/scholarships.db-shm
+          fi
+
       - name: Commit database + dashboard
+        if: always()
         uses: EndBug/add-and-commit@v9
         with:
-          add: "data/scholarships.db data/cache/http_cache.sqlite3 data/cache/parse_cache.sqlite3 docs"
+          # `-f` is required: `.gitignore` covers `data/`, and without it this
+          # step silently committed nothing (docs/ alone) while the README
+          # promised the opposite. http_cache.sqlite3 is deliberately NOT here —
+          # ~3 MB of scraped HTML a night is actions/cache' job, not git's.
+          add: "-f data/scholarships.db data/cache/parse_cache.sqlite3 docs"
           default_author: github_actions
           message: "chore(nightly): update database and dashboard"
           push: true

@@ -443,3 +443,27 @@ asserted the send *went out*, so they failed for three hours a day on any runner
 whose UTC clock was in that window (they did — at 10:07). `fixed_clock` now pins
 `notifiers.utcnow`, and since the panel lets you *edit* those hours the tests
 have no business depending on when CI happens to run.
+
+**45. The nightly DB commit was a no-op, and only reading the diff between the
+promise and the mechanism caught it.** README said the DB is "committed to the
+branch each night so an expired cache doesn't reset your dedupe memory", and
+`nightly-scrape.yml` had the right `add:` list — but `.gitignore:2` is `data/`,
+and `EndBug/add-and-commit` does not force-add ignored paths. `git ls-files data`
+returned nothing: the step committed `docs/` and *silently skipped the database*,
+which is the exact failure mode where a feature looks like it works (green run,
+files pushed) and the thing it existed to do never happened. Two fixes in one
+step: `add: "-f …"` for the ignored paths, and a `PRAGMA wal_checkpoint(TRUNCATE)`
+before the commit — the project runs SQLite in WAL mode, so at that moment **1.29
+MB of the newest transactions were sitting in `data/scholarships.db-wal` while
+`scholarships.db` held 516 KB of older state**; committing only the latter would
+have shipped a database missing the very run that wrote it. The ~3 MB HTTP cache
+was dropped from the commit (git is the wrong place for scraped HTML; the cache
+action keeps it). The general lesson: for "it persists" claims, verify the file
+is *tracked* (`git ls-files <path>`), not that the step is green.
+
+Also in this pass: the repo keeps no `ruff.toml`/`pyproject` config on purpose,
+which turned out to matter for the editor. Ruff 0.16's own defaults select far
+more than CI's `--select E,F,B,C4,SIM,UP --ignore E501`, so a bare `ruff check .`
+in VS Code reported 108 findings where CI reports 21 — I nearly "fixed" that by
+adding a config file, which would have changed what *CI* sees too. The honest
+fix was to make the editor task repeat CI's flags and document why.

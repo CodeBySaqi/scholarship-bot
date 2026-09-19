@@ -1,0 +1,104 @@
+{
+  // Terminal tasks, so you never have to remember the flags. `${command:python.interpreterPath}`
+  // is whatever interpreter the Python extension picked — it auto-detects the
+  // `.venv` in this folder — which keeps every task correct on Windows and on
+  // macOS/Linux without hard-coding `bin/python` vs `Scripts\python.exe`.
+  "version": "2.0.0",
+  "options": { "cwd": "${workspaceFolder}" },
+  "tasks": [
+    {
+      "label": "Setup venv + install deps",
+      "type": "shell",
+      "windows": {
+        "command": "python -m venv .venv ; .\\.venv\\Scripts\\python.exe -m pip install --upgrade pip ; .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt -r requirements-dev.txt"
+      },
+      "osx": {
+        "command": "python3 -m venv .venv && .venv/bin/python -m pip install --upgrade pip && .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt"
+      },
+      "linux": {
+        "command": "python3 -m venv .venv && .venv/bin/python -m pip install --upgrade pip && .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt"
+      },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "First run (one source, no notifications)",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": ["cli.py", "run", "--source", "scholars4dev_masters", "--limit", "4", "--no-notify"],
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Scrape everything (notifications on)",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": ["cli.py", "run"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Rebuild from cache (0 requests, 0 tokens)",
+      "detail": "Re-scores and re-exports what is already in data/cache — this is the one to run after editing a gate.",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": ["cli.py", "run", "--offline", "--force", "--no-notify"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Dashboard (control panel)",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": ["cli.py", "dashboard", "--rebuild"],
+      // A server never exits, so tell VS Code when it is *up* instead of
+      // waiting forever for the command to finish. The patterns match the two
+      // lines dashboard/server.py prints before serve_forever().
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": [{ "regexp": "^$", "file": 1, "line": 2, "column": 3 }],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Scholar Radar dashboard|token check DISABLED",
+          "endsPattern": "ctrl-c to stop"
+        }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Status (what would run, with what config)",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": ["cli.py", "status"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Tests (pytest)",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": ["-m", "pytest", "tests", "-q"],
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      // The repo keeps no ruff.toml/pyproject config on purpose; CI supplies the
+      // rule selection on the command line, so the task has to repeat it or the
+      // editor and the Action would report different numbers.
+      "label": "ruff check (same flags as CI)",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": ["-m", "ruff", "check", ".", "--select", "E,F,B,C4,SIM,UP", "--ignore", "E501"],
+      "group": "lint",
+      "problemMatcher": []
+    },
+    {
+      "label": "ruff format (check only — does not rewrite)",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": ["-m", "ruff", "format", ".", "--check", "--diff", "--line-length", "110"],
+      "group": "lint",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  // Both are what CI uses, so the editor and the Action agree on "clean".
+  "recommendations": ["ms-python.python", "charliermarsh.ruff"],
+  "unwantedRecommendations": []
+}

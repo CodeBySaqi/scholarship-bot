@@ -1,0 +1,80 @@
+{
+  // All of these run the same code the CLI and the nightly Action run — there is
+  // no VS Code-specific path to drift. Interpreter comes from .venv (see
+  // settings.json), so F5 works after the "Setup venv" task.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Dashboard (control panel)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/cli.py",
+      "args": ["dashboard", "--rebuild"],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Run once (scrape + notify)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/cli.py",
+      "args": ["run"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Run once — no notifications",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/cli.py",
+      "args": ["run", "--no-notify"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Rebuild from cache (0 requests, 0 tokens)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/cli.py",
+      "args": ["run", "--offline", "--no-notify", "--force"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Test one source (verbose)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/cli.py",
+      "args": ["test-source", "${input:sourceId}", "--limit", "2", "--show-text"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Preview the digest that would be sent",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/cli.py",
+      "args": ["notify-preview"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Tests (pytest)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests", "-q"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Python: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "sourceId",
+      "type": "promptString",
+      "description": "source id from config.yaml (e.g. scholars4dev_masters)",
+      "default": "scholars4dev_masters"
+    }
+  ]
+}

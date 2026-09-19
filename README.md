@@ -269,14 +269,47 @@ writes and jobs.
 3. Actions → *nightly-scrape* → Run workflow to test. The step summary shows a
    per-source table; if a source breaks the workflow opens (and comments on) a
    `scraper-health` issue.
-4. The DB and caches persist via `actions/cache` **and** are committed to `docs/`'s
-   sibling `data/` path each night, so an expired Actions cache doesn't reset
-   your dedupe memory.
+4. The DB is your dedupe memory, so it is persisted twice: `actions/cache`
+   (fast) and a nightly commit of `data/scholarships.db` + the parse cache back
+   to the branch (survives an expired cache). Two details that are easy to get
+   wrong and silently lose history: that path is matched by `.gitignore`, so the
+   commit step needs `git add -f`, and SQLite runs in WAL mode, so the workflow
+   checkpoints the `-wal` file into the DB *before* committing — otherwise the
+   file in git is missing the run that just happened. The ~3 MB HTTP cache is
+   deliberately not committed; only the cache action keeps that.
 5. Playwright is installed **only** when a source has `render: true` — saves
    ~2 min and 400 MB of every run.
 
 Local scheduling instead: `python cli.py run` from cron/systemd, or keep the
 `schedule` library loop (`while True: schedule.run_pending()`).
+
+## Running it in VS Code
+
+No extension or config is needed to *run* it — `python cli.py dashboard` in the
+integrated terminal is the whole thing. What's committed in `.vscode/` just
+removes the remembering:
+
+- **tasks.json** — `Setup venv + install deps` (one task per OS, so no
+  `bin/python` vs `Scripts\python.exe` guessing), *First run*, *Rebuild from
+  cache* (0 requests, 0 tokens), *Dashboard*, *Tests*, and `ruff` check/format
+  with CI's exact flags.
+- **launch.json** — F5 for the dashboard, a notify-suppressed run, the offline
+  rebuild, `test-source <id>` with a prompt, and pytest.
+- **settings.json** — pytest discovery, the venv interpreter is auto-detected,
+  `data/` is unwatched (the DB and cache change mid-run), and **format-on-save
+  is off on purpose**: `ruff format` would reflow nearly every file and bury a
+  real change in a formatting diff.
+
+Two things to know on a laptop:
+
+1. If a task says the interpreter command didn't resolve, run
+   *Python: Select Interpreter* and pick `.venv`.
+2. **Local runs and the nightly Action share the DB through git.** `git pull`
+   before you experiment (so the panel sees what has already been notified), and
+   commit `data/scholarships.db` after a local run you want kept — or run
+   experiments with `--no-notify`, which is also the safe default while you're
+   deciding what to do.
+
 
 ## Tests
 
@@ -304,8 +337,12 @@ verify/pair/send against a **local fake Bot API** (the same
 is checked with `node --check` and for ids/handlers it references but never
 creates — which has already caught two real breakages.
 
-Lint: `python -m ruff check .` — clean apart from deliberate `BLE001`s (a scraper
-that raises kills the whole run, so broad catches are the point).
+Lint: `python -m ruff check . --select E,F,B,C4,SIM,UP --ignore E501` — that
+exact command is what CI runs (advisory, `continue-on-error`), and the repo keeps
+no `ruff.toml`/`pyproject` config, so a bare `ruff check .` uses Ruff's own much
+wider defaults and reports ~90 extra findings (import sorting, `datetime.now()`
+tz nits, `BLE001` in code where a broad catch is the point: a scraper that raises
+kills a whole nightly run). Match CI's flags before "fixing" anything.
 
 ## CI plumbing
 

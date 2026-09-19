@@ -1,0 +1,32 @@
+{
+  // Nothing here is required to run the project — it only removes the
+  // "which interpreter / which flags" guesswork. VS Code finds `.venv` in the
+  // workspace root by itself on Windows and macOS/Linux, so no interpreter path
+  // is hard-coded (a literal `${workspaceFolder}/.venv/bin/python` is wrong on
+  // Windows, where it is `.venv\\Scripts\\python.exe`).
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests", "-q"],
+  "python.testing.unittestEnabled": false,
+  "ruff.importStrategy": "fromEnvironment",
+  "python.analysis.extraPaths": ["${workspaceFolder}"],
+  "python.analysis.typeCheckingMode": "basic",
+  // The SQLite DB and the HTTP cache change during every run; watching them
+  // makes the explorer churn and can trigger a reload mid-scrape.
+  "files.watcherExclude": {
+    "**/data/**": true,
+    "**/.venv/**": true,
+    "**/__pycache__/**": true
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    "**/*.bak-*": true
+  },
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  // Deliberately NOT format-on-save: `ruff format` would reflow nearly every
+  // file and bury a real change in a formatting diff. Use the
+  // "ruff format (check only)" task to see what it would have done.
+  "editor.formatOnSave": false
+}
