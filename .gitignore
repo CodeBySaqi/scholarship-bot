@@ -7,3 +7,6 @@ __pycache__/
 .venv/
 dist/
 *.log
+
+# dashboard writes a timestamped copy of config.yaml/.env before each edit
+*.bak-*

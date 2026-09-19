@@ -125,7 +125,25 @@ def _digest(settings, sess):
                         stats={"sources_ok": 1, "new": len(pool), "changed": 0, "llm_calls": 0, "llm_cost_usd": 0.0})
 
 
-def test_all_channels_reach_the_wire(two_rows, inbox):
+@pytest.fixture()
+def fixed_clock(monkeypatch):
+    """Pin the notifier clock to 20:00 UTC.
+
+    Two tests below declare quiet hours of 10:00-13:00 and then assert that the
+    send *went out* — which made them fail for three hours a day on a real clock
+    (they did, on a CI runner that happened to start at 10:07 UTC). The dashboard
+    now lets those hours be edited, so the tests must not depend on when they run.
+    """
+    from datetime import datetime
+
+    frozen = datetime(2026, 3, 5, 20, 15, 0)
+    import notifiers
+
+    monkeypatch.setattr(notifiers, "utcnow", lambda: frozen)
+    return frozen
+
+
+def test_all_channels_reach_the_wire(two_rows, inbox, fixed_clock):
     from notifiers import deliver
 
     settings, sess = two_rows
@@ -176,7 +194,7 @@ def test_all_channels_reach_the_wire(two_rows, inbox):
     assert {r.channel for r in logged} >= {"email", "webhook", "telegram"}
 
 
-def test_dedupe_blocks_the_next_identical_digest(two_rows, inbox):
+def test_dedupe_blocks_the_next_identical_digest(two_rows, inbox, fixed_clock):
     from notifiers import deliver
 
     settings, sess = two_rows

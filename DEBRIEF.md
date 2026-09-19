@@ -378,3 +378,68 @@ are too far from the number to be trusted), and `€992/month (Master) or
 €1,300/month (PhD)` reports the *upper* figure — a Master's applicant sees a
 number worth about 20 % more than they would receive, which is why the digest
 prints the source's own wording beside it.
+
+## I. The control dashboard (40–44)
+
+**40. A page that owns its own copy of the settings is a bug factory, so the
+dashboard edits the real files and nothing else.** The first design I sketched
+kept panel preferences in a `data/dashboard.json` next to `config.yaml` — and
+that is exactly how you get a UI showing one value while the nightly Action runs
+another. So `settings_io.write_settings()` patches `config.yaml` *textually*
+(`patch.py` finds the key by walking indents and rewrites that one line, keeping
+comments, key order and the `sources:` block intact), and every action calls the
+same `core.pipeline.run` / `notifiers.deliver` the CLI calls. Verification: the
+page set `notify.min_score` to 60 → `grep min_score config.yaml` showed
+`min_score: 60`, the revert restored 58, and `git status` showed
+`config.yaml` unmodified at the end.
+
+**41. `yaml.dump` would have been the easy wrong answer.** Dumping the parsed
+dict rewrites all 260 lines: every comment gone (`# hard eligibility gate`,
+the whole "what this weight means" block), float formatting shuffled, and the
+multi-line `countries_preferred` list collapsed. Losing the explanation of a
+config is how a config stops being maintainable, so the editor is textual, and
+its contract is enforced by a test that counts `#` before and after and asserts
+`sources` still has 10 items. The safety net for "text editing can produce
+unparseable YAML": write atomically → `load_config()` the result → if it raises,
+restore the timestamped backup and return the parse error to the browser
+(`422 {rolled_back: true}`). A test sabotages the patcher to prove the rollback
+actually restores the file byte-for-byte.
+
+**42. Two value-coercion bugs that only show up as silent behaviour changes.**
+(i) `format_value` quoted anything matching `-?\d+` so `min_score: 62` came back
+as `"62"` and the *quiet hours* list became `["1","8"]` — comparing a string
+hour against `datetime.hour` is always False, i.e. quiet hours would have
+stopped working with no error anywhere. Fixed by only quoting **strings** (a
+chat id like `-1001234567890` must stay a string, a number must stay a
+number). (ii) An empty box for `int`/`float` coerced to `0` — which for
+`min_score`, `min_award_usd` or `daily_cap` means "switch that gate off". Now an
+empty value either means `null` (fields declared `nullable`) or raises
+`cannot be empty (empty would disable the setting)`.
+
+**43. The chat id is never typed, guessed, or invented.** `POST /api/telegram
+{action:"pair"}` clears any webhook, reads `getUpdates`, and returns the chats
+that have actually messaged the bot; "Use this chat" writes both
+`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to `.env` and, if `telegram` is not
+in `notify.channels`, adds it — because a paired chat on a channel that is off
+is a silent no-op, and "the bot never messages me" is the single most likely
+support ticket for this project. `verify` deliberately works *before* the token
+is saved (the helper takes an explicit token override), so the page can say
+"this token is valid" instead of asking for a leap of faith. Against the real
+Bot API from this sandbox, a bogus token returned `502 {"error": "Unauthorized"}`
+— Telegram's own wording, not a stack trace.
+
+**44. An inline single-file page still needs tests, and `node --check` is one.**
+No framework, no build step, no CDN (the preview iframe has no network, so an
+external stylesheet is just a missing style). The cost of a hand-written page is
+that a typo is invisible until it is clicked. Two checks pay for themselves:
+`node --check` on the extracted `<script>` — it caught a single-quoted string
+spanning two lines inside a template literal, which kills the *whole* page, not
+just one widget — and an id/handler cross-reference that asserts every
+`$('#x')` the script reads is created by some markup, and every `onclick` names a
+defined function (that check caught `boot()` wiring a `#rundigest` button that
+never existed, which would have thrown during startup and left every tab empty).
+Also time-dependent: two delivery tests declared `quiet_hours: [10, 13]` and
+asserted the send *went out*, so they failed for three hours a day on any runner
+whose UTC clock was in that window (they did — at 10:07). `fixed_clock` now pins
+`notifiers.utcnow`, and since the panel lets you *edit* those hours the tests
+have no business depending on when CI happens to run.

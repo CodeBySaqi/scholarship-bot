@@ -126,6 +126,13 @@ class Scholarship(Base):
     extras: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     status: Mapped[str] = mapped_column(String(20), default=STATUS_ACTIVE, index=True)
+    # reader actions from the dashboard. Deliberately *not* `status`: the pipeline
+    # resets status to active whenever it sees a row again, which would silently
+    # un-hide anything you hid, and a control that stops working on the next run
+    # is worse than no control.
+    starred: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    notes: Mapped[str | None] = mapped_column(Text)
     is_new: Mapped[bool] = mapped_column(Boolean, default=True)
     changed: Mapped[bool] = mapped_column(Boolean, default=False)
     change_type: Mapped[str | None] = mapped_column(String(40))

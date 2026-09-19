@@ -517,7 +517,7 @@ def _notification_pool(session, scored_rows: list[Scholarship], *, force: bool, 
     pool: list[Scholarship] = []
     counts: dict[str, int] = {}
     tier_counts: dict[str, int] = {}
-    rows = [r for r in scored_rows if r.gate_pass and r.match_score >= min_score]
+    rows = [r for r in scored_rows if r.gate_pass and r.match_score >= min_score and not getattr(r, "hidden", False)]
     rows.sort(key=lambda r: (-r.match_score, r.deadline or datetime.max))
     for row in rows:
         if not force and not (row.is_new or row.changed or row.notified is False):

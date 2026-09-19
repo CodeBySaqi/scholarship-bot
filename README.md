@@ -198,10 +198,65 @@ test-source <id>             one source, live, shows fields found / score / gate
 run                          full cycle (--source, --limit, --offline, --force, --no-notify)
 query                        -q, --tier, --country, --degree, --funding, --min-score, --soon, --explain
 report                       rewrite data/out/{index.html,data.json,scholarships.csv,summary.md}
-dashboard                    serve that folder locally (--rebuild)
+dashboard                    the control panel: edit config, tune sources, pair Telegram, run jobs
+dashboard --static           just serve data/out/ (the GitHub Pages preview)
 health                       per-source reliability from the last run
 notify-preview               render the digest that would be sent (--html, --mark-sent)
 ```
+
+## Control dashboard
+
+```bash
+python cli.py dashboard                 # → http://127.0.0.1:8765/  + prints the token
+python cli.py dashboard --port 9000 --read-only
+```
+
+It is a **control panel, not a second app**: every button drives the same
+`config.yaml`, the same SQLite file and the same `core.pipeline.run` that the
+CLI and the nightly Action use. Change a gate here and the next GitHub Actions
+run obeys it, because there is nothing else to change.
+
+| tab | what it is for |
+|---|---|
+| **Overview** | counts, tier spread, per-source last run, engine state, and the four actions (scrape / rebuild-from-cache / send digest / health) with a live log |
+| **Scholarships** | the archive as a page: search, country, level, tier, source, funding, status (`active`, `expiring`, `closed`…), sort, paging; click a row for the full record — score breakdown, gate reasons, money as stated vs normalised, and your own notes |
+| **Sources** | toggle each source on/off, retune pages/detail/limit/interval, test one against the live site without writing to the DB, add a new one (appends a commented block under `sources:`), remove one |
+| **Notify** | channels, thresholds, quiet hours, dry run — plus the Telegram flow: paste token → **Verify** → **Pair** → **Use this chat** → **Send test message** |
+| **Settings** | profile, gates, scoring weights/tiers, LLM/budget, runtime. Secrets are separate boxes that write to `.env` only |
+| **Log** | the job list with each job's captured output and result |
+| **Exports** | the generated `index.html` / `data.json` / `scholarships.csv` / `summary.md`, with size and mtime |
+
+Three things it does on purpose:
+
+* **Nothing is invented for the page.** `dispatch(ctx, method, path, query, body)`
+  in `dashboard/api.py` is a pure function over parsed request parts, so the
+  tests call the routes without opening a socket, and `server.py` stays a thin
+  `http.server` adapter — no FastAPI, no new dependency in `requirements.txt`.
+* **Secrets go to `.env`, never to `config.yaml`** (which is committed). The API
+  echoes them back only as `…last4`, and saving pushes the value into
+  `os.environ` so the running server uses it immediately instead of at next boot.
+* **A config write is only kept if it reloads.** `config.yaml` is edited
+  textually so the comments stay, then `load_config()` re-reads it; if that
+  raises, the timestamped backup goes back and you get the parse error instead
+  of a broken nightly run.
+
+Telegram pairing reads `getUpdates` for the chat that actually messaged the bot
+(it clears any webhook first, or `getUpdates` is always empty), so a chat id is
+never guessed — and it means "press **Start** in Telegram" is a real step, not
+a guess you have to debug. To pair a *group*, send `/start` in it: slash
+commands still reach a bot with privacy mode on.
+
+Jobs run one at a time on a daemon thread — a scrape holds a socket otherwise,
+and two runs would fight over the same cache dir and SQLite file. A second
+request while one is running gets `409 {busy: true}`.
+
+The page is a single self-contained HTML string (dark, no CDN, relative
+`/api/...` URLs), which is what lets it render inside a sandboxed preview
+iframe that has no network access. Auth is one token in `data/dashboard.token`
+(0600, gitignored); `?token=` hands it to a cookie. `--insecure` skips the gate
+— for a port only you can reach; `--read-only` keeps it viewable but refuses
+writes and jobs.
+
 
 ## Deploying on GitHub Actions (free)
 
@@ -227,7 +282,7 @@ Local scheduling instead: `python cli.py run` from cron/systemd, or keep the
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest tests -q          # 129 tests, fully offline
+python -m pytest tests -q          # 210 tests, fully offline
 ```
 
 Coverage: date/money/IELTS/GPA/label parsing, HTML cleaning, schema rejection of
@@ -240,7 +295,14 @@ escaping, quiet hours, caps, dedupe, Telegram chunking), digest rendering for
 all channels, the LLM client against a **local mock OpenAI server** (batch,
 cache, budget, malformed-output recovery, no-overwrite rule), and config loading
 (every `profile:` key in config.yaml must map to a real field — that is how
-`work_experience_years` being silently ignored got caught).
+`work_experience_years` being silently ignored got caught), and the dashboard:
+every route through `dispatch` (status/scholarships/settings/jobs/telegram/
+exports), comment-preserving config patches with rollback on a rejected write,
+`.env`-only secrets, hidden/starred rows, an offline run as a job, and Telegram
+verify/pair/send against a **local fake Bot API** (the same
+`notify.telegram_api_base` hook the delivery tests use). The inline page script
+is checked with `node --check` and for ids/handlers it references but never
+creates — which has already caught two real breakages.
 
 Lint: `python -m ruff check .` — clean apart from deliberate `BLE001`s (a scraper
 that raises kills the whole run, so broad catches are the point).

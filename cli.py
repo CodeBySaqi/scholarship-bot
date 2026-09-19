@@ -5,7 +5,8 @@
     python cli.py run                        the full nightly cycle
     python cli.py query --tier must_apply     ask the DB
     python cli.py report                      regenerate data/out/*
-    python cli.py dashboard                   preview the static dashboard
+    python cli.py dashboard                   control panel: config, sources, Telegram, run-now
+    python cli.py dashboard --static          the read-only export page instead
 """
 
 from __future__ import annotations
@@ -181,18 +182,45 @@ def cmd_query(args) -> int:
 
 
 def cmd_dashboard(args) -> int:
+    """Serve the control panel (or the old static report with --static)."""
     settings = load_config(args.config)
     out = Path(args.out)
+    if args.static:
+        if not (out / "index.html").exists() or args.rebuild:
+            init_engine(settings.db_url)
+            from db.session import get_session
+            from reporting import export
+
+            export(get_session(), out)
+        from reporting import serve
+
+        serve(out, port=args.port, host=args.host)
+        return 0
+
+    from dashboard.api import Ctx
+    from dashboard.server import serve as serve_panel
+
+    root = Path(__file__).resolve().parent
+    ctx = Ctx(
+        root=root,
+        config_path=Path(args.config) if args.config else root / "config.yaml",
+        env_path=root / ".env",
+        allow_writes=not args.read_only,
+    )
+    init_engine(ctx.settings().db_url)
     if not (out / "index.html").exists() or args.rebuild:
-        init_engine(settings.db_url)
         from db.session import get_session
         from reporting import export
 
         export(get_session(), out)
-    from reporting import serve
-
-    serve(out, port=args.port, host=getattr(args, "host", "0.0.0.0"))
-    return 0
+    return serve_panel(
+        ctx,
+        host=args.host,
+        port=args.port,
+        insecure=args.insecure,
+        token=args.token,
+        verbose=bool(args.verbose),
+    )
 
 
 def cmd_health(args) -> int:
@@ -301,11 +329,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--statuses", default="active")
     sp.set_defaults(fn=cmd_report)
 
-    sp = sub.add_parser("dashboard", help="serve the static dashboard")
-    sp.add_argument("--out", default="data/out")
-    sp.add_argument("--port", type=int, default=8000)
+    sp = sub.add_parser("dashboard", help="serve the control panel (edit config, run jobs, pair Telegram)")
+    sp.add_argument("--out", default="data/out", help="where the static export lives (linked from the panel)")
+    sp.add_argument("--port", type=int, default=8765)
     sp.add_argument("--host", default="0.0.0.0", help="0.0.0.0 works behind a proxy/tunnel")
-    sp.add_argument("--rebuild", action="store_true")
+    sp.add_argument("--rebuild", action="store_true", help="regenerate data/out before serving")
+    sp.add_argument("--static", action="store_true", help="serve the old read-only report instead of the panel")
+    sp.add_argument("--read-only", action="store_true", help="no writes to config/.env, no jobs")
+    sp.add_argument("--insecure", action="store_true",
+                    help="skip the token gate — only for a port you alone can reach")
+    sp.add_argument("--token", help="override the token in data/dashboard.token")
     sp.set_defaults(fn=cmd_dashboard)
 
     sp = sub.add_parser("health", help="per-source reliability from the last run")
