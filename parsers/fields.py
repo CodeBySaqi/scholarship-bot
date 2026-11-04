@@ -335,11 +335,17 @@ def _find_dates(text: str, *, today: date, horizon_days: int) -> list[tuple[str,
             push("month_year", date(year, month, _last_day(year, month)), m.group(0), True)
 
     # bare "6 Oct" / "18 Sept" with no year → roll forward to the next occurrence
+    # A bare day-month that merely repeats the day/month of a dated literal
+    # (e.g. the "6 Oct" inside "6 Oct 2026") is not a second date: rolling it
+    # forward would invent a next-year deadline and hide the stated one.
+    exact_day_months = {(f[1].day, f[1].month) for f in found if f[0] in {"exact", "iso"}}
     for m in re.finditer(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+({MONTHS_ALT})\b", text, re.IGNORECASE):
         try:
             day, mon_s = int(m.group(1)), m.group(2)
             month = MONTHS[mon_s[:3].lower()]
             if month == 12 and day > 25:
+                continue
+            if (min(day, _last_day(today.year, month)), month) in exact_day_months:
                 continue
             day = min(day, _last_day(today.year, month))
             d = date(today.year, month, day)
@@ -356,21 +362,35 @@ def _find_dates(text: str, *, today: date, horizon_days: int) -> list[tuple[str,
     exact_months = {(f[1].year, f[1].month) for f in found if f[0] in {"exact", "iso"}}
     found = [f for f in found if not (f[0] == "month_year" and (f[1].year, f[1].month) in exact_months)]
 
-    # Rank: (1) not-yet-passed beats passed — compare full datetimes, because a
-    # 23:59 deadline is still open today; (2) a literal date beats a guess;
-    # (3) soonest first. Passed dates stay in the list (newest first) so the
-    # caller can roll an annual cycle forward instead of dropping the row.
+    # Rank: a stated literal date always beats a guess, even a still-open one —
+    # otherwise a month-end guess (e.g. a course-start month) hides a passed
+    # literal deadline instead of returning it flagged as past, which is what
+    # the pipeline needs to decide about rolling an annual cycle forward.
+    # Within each tier: future dates soonest first, passed dates newest first.
+    # Compare full datetimes, because a 23:59 deadline is still open today.
     now = datetime.now()
 
-    def rank(f):
+    def tier(f):
         kind, dt, _matched, _est = f
-        passed = 1 if dt < now else 0
-        exactness = 0 if kind in {"exact", "iso"} else 1
-        return (passed, exactness, dt)
+        exact = kind in {"exact", "iso"}
+        passed = dt < now
+        if exact and not passed:
+            return 0
+        if exact and passed:
+            return 1
+        if not exact and not passed:
+            return 2
+        return 3
 
-    future = sorted((f for f in found if rank(f)[0] == 0), key=rank)
-    past = sorted((f for f in found if rank(f)[0] == 1), key=lambda f: f[1], reverse=True)
-    return future + past
+    tiers = {t: [] for t in range(4)}
+    for f in found:
+        tiers[tier(f)].append(f)
+    out = []
+    out += sorted(tiers[0], key=lambda f: f[1])
+    out += sorted(tiers[1], key=lambda f: f[1], reverse=True)
+    out += sorted(tiers[2], key=lambda f: f[1])
+    out += sorted(tiers[3], key=lambda f: f[1], reverse=True)
+    return out
 
 
 def _choose_deadline(cands: list[tuple[str, datetime, str, bool]]) -> dict[str, Any]:
